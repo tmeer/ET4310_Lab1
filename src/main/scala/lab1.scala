@@ -117,11 +117,32 @@ object Lab1
 			withColumn("AllNames", shortenArray($"AllNames"));			//keep only the first ten topics per date
 
 		// Print the result
+		println("####################### DATASET IMPLEMENTATION #######################");
 		countedTopicsPerDay.collect.foreach(println);
 
 		val endTime = System.currentTimeMillis();
 
-		println("Total time taken: " + (endTime - startTime)/1000 + " seconds.")
+		println("Total time taken: " + (endTime - startTime)/1000 + " seconds.");
+		
+
+
+		println("####################### RDD IMPLEMENTATION #######################");
+		def tupleconvert (array: Array[String]) : (String, String) = (array(0),array(1))
+		def toTuple(tuple: (String, String)): (String, Int) = 
+			try {
+				tuple match{
+				case(chr,int) => (chr,1)
+				case _ => ("",0)}
+				} catch {
+				case e: Exception => ("",0)
+			}
+		val raw_data = sc.textFile("data/segment")
+		val RDD3 = raw_data.map(_.split("\t",-1)).map(x => x(23))
+		val RDD4 = RDD3.flatMap(x => x.split(";"))  //RDD[Array[String]]
+		val RDD5 = RDD4.filter(x => x != "" )
+		val RDD6 = RDD5.map(x => x.split(",")).map(tupleconvert).map(toTuple)
+		val RDD8 = RDD6.reduceByKey(_ + _).sortBy(_._2,false)
+		RDD8.take(11).drop(1).foreach(println)
 
 		spark.stop();
 	}
