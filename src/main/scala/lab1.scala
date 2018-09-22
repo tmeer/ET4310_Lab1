@@ -6,6 +6,7 @@ import org.apache.spark.sql._;
 import org.apache.spark.sql.types._;
 import org.apache.spark.sql.functions._;
 import java.sql.Timestamp;
+import scala.collection.mutable.WrappedArray;
 
 case class GKGSchemaHeaders
 (
@@ -81,49 +82,48 @@ object Lab1
 					StructField("Extras",						StringType,		true)	
 			)
 		);
-
-		// Load the data from the segment files
-		val segment1 = spark.read.schema(GKGSchema).
+		
+		// Read the files
+		val segments = spark.read.schema(GKGSchema).
 			option("delimiter", "\t").
 			option("timestampFormat", "YYYYMMDDHHMMSS").
-			csv("data/segment/20150218230000.gkg.csv").
-			as[GKGSchemaHeaders];
-		val segment2 = spark.read.schema(GKGSchema).
-			option("delimiter", "\t").
-			option("timestampFormat", "YYYYMMDDHHMMSS").
-			csv("data/segment/20150218231500.gkg.csv").
-			as[GKGSchemaHeaders];
-		val segment3 = spark.read.schema(GKGSchema).
-			option("delimiter", "\t").
-			option("timestampFormat", "YYYYMMDDHHMMSS").
-			csv("data/segment/20150218233000.gkg.csv").
-			as[GKGSchemaHeaders];
-		val segment4 = spark.read.schema(GKGSchema).
-			option("delimiter", "\t").
-			option("timestampFormat", "YYYYMMDDHHMMSS").
-			csv("data/segment/20150218234500.gkg.csv").
+			csv("data/segment/*.csv").
 			as[GKGSchemaHeaders];
 
-		// Take the union of the data frames
-		val allSegments = segment1.unionAll(segment2).unionAll(segment3).unionAll(segment4);
+		// User-defined function for removing the character offset number from each occurrence of a topic in a document
+		val removeCharOffset = udf((data : String) => data.substring(0, data.lastIndexOf(',')));
+		val removeTimeComponent = udf((date : Timestamp) => date);
+//		val mergeColumns = udf((col1 : String, col2 : String) => col1 + "," + col2);
+		val mergeColumns = udf((col1 : String, col2 : String) => (col1, col2));
+		val shortenArray = udf((wrappedArray : WrappedArray[(String,String)]) => wrappedArray.take(10));
 
 		// Find the topics
-		val allSegmentsNames = allSegments.
-			//limit(100).					// limit the size of the data frame for testing purposes
-			select("AllNames").				// select only the relevant column
-			flatMap(_.mkString.split(";")). // split the rows so that each row contains one topic
-			filter("value != 'null'").		// filter out rows only containing 'null' (for some reason column changed names)
-			map(line => line.substring(0, line.lastIndexOf(','))).	// remove the char index for each row
-			toDF("AllNames");				// change back to data frame of rows instead of strings
+		val countedTopicsPerDay = segments.//limit(50).
+			select("DATE", "AllNames").									//select the two relevant columns
+			withColumn("DATE", removeTimeComponent($"DATE")).
+			withColumn("AllNames", explode(split($"AllNames", ";"))).	//generate a seperate row for each date-topic pair
+			filter("AllNames != 'null'").								//remove the null entries
+			withColumn("AllNames", removeCharOffset($"AllNames")).		//remove the character offset numbers from each row
+			groupBy("DATE", "AllNames").count().						//group and count the occurrences of each topic
+			orderBy(desc("count")).										//order them in a descending order by count
+			withColumn("AllNames", mergeColumns($"AllNames", $"count")).//merge the AllNames and count column
+			select("DATE", "AllNames").									//effectively delete the count column
+			groupBy("DATE").agg(collect_list("AllNames").as("AllNames")).
+			withColumn("AllNames", shortenArray($"AllNames"));
 
+		countedTopicsPerDay.printSchema();
+
+		countedTopicsPerDay.collect.foreach(println);
+/*		
+			
 		// Group by topic and count
 		val allSegmentsGrouped = allSegmentsNames.groupBy("AllNames").count();
 		// Sort them in descending order
 		val allSegmentsSorted = allSegmentsGrouped.orderBy(desc("count"));
 
 		// And finally display the top 10 topics
-		allSegmentsSorted.take(50).foreach(println);
-
+		allSegmentsSorted.take(10).foreach(println);
+*/
 		spark.stop();
 	}
 }
