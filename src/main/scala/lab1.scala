@@ -83,6 +83,8 @@ object Lab1
 			)
 		);
 		
+		val startTime = System.currentTimeMillis();
+
 		// Read the files
 		val segments = spark.read.schema(GKGSchema).
 			option("delimiter", "\t").
@@ -90,40 +92,37 @@ object Lab1
 			csv("data/segment/*.csv").
 			as[GKGSchemaHeaders];
 
-		// User-defined function for removing the character offset number from each occurrence of a topic in a document
+		// UDF for removing the character offset number from each occurrence of a topic in a document
 		val removeCharOffset = udf((data : String) => data.substring(0, data.lastIndexOf(',')));
-		val removeTimeComponent = udf((date : Timestamp) => date);
-//		val mergeColumns = udf((col1 : String, col2 : String) => col1 + "," + col2);
+		// UDF for converting a full date+timestamp to only the date
+		val removeTimeComponent = udf((date : String) => date.substring(0, date.indexOf(' ')));
+		// UDF for merging two columns into one column containing a tuple of the values of the original columns
 		val mergeColumns = udf((col1 : String, col2 : String) => (col1, col2));
+		// UDF for only selecting the first 10 elements of an array
 		val shortenArray = udf((wrappedArray : WrappedArray[(String,String)]) => wrappedArray.take(10));
 
-		// Find the topics
-		val countedTopicsPerDay = segments.//limit(50).
+		// Find, count and group the topics per date
+		val countedTopicsPerDay = segments.
 			select("DATE", "AllNames").									//select the two relevant columns
-			withColumn("DATE", removeTimeComponent($"DATE")).
+			withColumn("DATE", removeTimeComponent($"DATE")).			//keep only the date part of this column
 			withColumn("AllNames", explode(split($"AllNames", ";"))).	//generate a seperate row for each date-topic pair
 			filter("AllNames != 'null'").								//remove the null entries
 			withColumn("AllNames", removeCharOffset($"AllNames")).		//remove the character offset numbers from each row
+			filter("AllNames != 'Type ParentCategory'").				//remove this false positive
 			groupBy("DATE", "AllNames").count().						//group and count the occurrences of each topic
 			orderBy(desc("count")).										//order them in a descending order by count
 			withColumn("AllNames", mergeColumns($"AllNames", $"count")).//merge the AllNames and count column
 			select("DATE", "AllNames").									//effectively delete the count column
-			groupBy("DATE").agg(collect_list("AllNames").as("AllNames")).
-			withColumn("AllNames", shortenArray($"AllNames"));
+			groupBy("DATE").agg(collect_list("AllNames").as("AllNames")).	//group by date
+			withColumn("AllNames", shortenArray($"AllNames"));			//keep only the first ten topics per date
 
-		countedTopicsPerDay.printSchema();
-
+		// Print the result
 		countedTopicsPerDay.collect.foreach(println);
-/*		
-			
-		// Group by topic and count
-		val allSegmentsGrouped = allSegmentsNames.groupBy("AllNames").count();
-		// Sort them in descending order
-		val allSegmentsSorted = allSegmentsGrouped.orderBy(desc("count"));
 
-		// And finally display the top 10 topics
-		allSegmentsSorted.take(10).foreach(println);
-*/
+		val endTime = System.currentTimeMillis();
+
+		println("Total time taken: " + (endTime - startTime)/1000 + " seconds.")
+
 		spark.stop();
 	}
 }
