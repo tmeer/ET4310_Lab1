@@ -83,8 +83,6 @@ object Lab1
 			)
 		);
 		
-		val startTime = System.currentTimeMillis();
-
 		// Read the files
 		val segments = spark.read.schema(GKGSchema).
 			option("delimiter", "\t").
@@ -120,29 +118,26 @@ object Lab1
 		println("####################### DATASET IMPLEMENTATION #######################");
 		countedTopicsPerDay.collect.foreach(println);
 
-		val endTime = System.currentTimeMillis();
-
-		println("Total time taken: " + (endTime - startTime)/1000 + " seconds.");
-		
-
-
 		println("####################### RDD IMPLEMENTATION #######################");
-		def tupleconvert (array: Array[String]) : (String, String) = (array(0),array(1))
-		def toTuple(tuple: (String, String)): (String, Int) = 
-			try {
-				tuple match{
-				case(chr,int) => (chr,1)
-				case _ => ("",0)}
-				} catch {
-				case e: Exception => ("",0)
-			}
+
+		def tupleconvert (array: Array[String]): (String, String) = (array(0),array(1))
+		def toTuple(tuple: (String, String)): (String, Int) = try { tuple match{
+			case (chr,int) => (chr,1)
+			case _ => ("",0)}
+			} catch {case e: Exception => ("",0)}
+		def totalfunction (rdd: (String, String)): Array[(String, Int)] = {
+			val rdd2 = rdd._2.split(";").filter(x => x != "" ).map(x => x.split(","))
+			val rdd3 =  rdd2.map(tupleconvert).map(toTuple) //Array[(String,Int)]
+			return rdd3.map(x => ( rdd._1+ " "+ x._1, x._2))}//.sortBy(_._2,false)
+		
 		val raw_data = sc.textFile("data/segment")
-		val RDD3 = raw_data.map(_.split("\t",-1)).map(x => x(23))
-		val RDD4 = RDD3.flatMap(x => x.split(";"))  //RDD[Array[String]]
-		val RDD5 = RDD4.filter(x => x != "" )
-		val RDD6 = RDD5.map(x => x.split(",")).map(tupleconvert).map(toTuple)
-		val RDD8 = RDD6.reduceByKey(_ + _).sortBy(_._2,false)
-		RDD8.take(11).drop(1).foreach(println)
+		val RDD1 = raw_data.map(_.split("\t",-1)).map(x => (x(0).substring(0, 8),x(23)))
+		val RDD2 = RDD1.groupByKey().map(x => (x._1,x._2.toString())) 
+		//val RDD3 = RDD2.flatMap(totalfunction).reduceByKey(_+_).sortBy(_._2,false)
+		val RDD4 = RDD2.collectAsMap().map(x => (x._1,x._2.split(";").filter(x => x != "" )))
+		val RDD5 = RDD4.map(x => (x._1,sc.parallelize(x._2).map(x => x.split(",")).map 
+	(tupleconvert).map(toTuple).filter(x => x._1 != "Type ParentCategory").reduceByKey(_ + _).sortBy(_._2,false)))	
+		RDD5.map(x => (println("date: "+x._1), x._2.take(10).foreach(println)))
 
 		spark.stop();
 	}
